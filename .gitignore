@@ -1,0 +1,14 @@
+build/
+.vs/
+.vscode/
+*.sln
+*.vcxproj
+*.vcxproj.filters
+*.user
+*.obj
+*.pdb
+*.ilk
+*.lib
+*.a
+docs/
+Doxyfile
