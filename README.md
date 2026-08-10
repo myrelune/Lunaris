@@ -62,3 +62,6 @@ YourProject/
   src/
     YourCode.c/c++
   build
+
+## Example Project
+https://github.com/myrelune/lunaris-example
