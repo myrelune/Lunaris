@@ -3,6 +3,7 @@
 #include "glad/gl.h"
 #include "GLFW/glfw3.h"
 
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <stddef.h>
@@ -13,6 +14,13 @@
     #else
     #include <time.h>
 #endif
+
+typedef struct Camera2D {
+    Vec2 position;
+    Vec2 offset;
+    float rotation;
+    float zoom;
+} Camera2D;
 
 typedef struct Vertex {
     Vec2 position;
@@ -26,6 +34,12 @@ static GLuint g_defaultShader = 0;
 static GLuint g_batchVAO = 0;
 static GLuint g_batchVBO = 0;
 
+static GLint g_uResolutionLoc = -1;
+static GLint g_uCameraPosLoc = -1;
+static GLint g_uCameraOffsetLoc = -1;
+static GLint g_uCameraRotationLoc = -1;
+static GLint g_uCameraZoomLoc = -1;
+
 static int g_windowWidth = 0;
 static int g_windowHeight = 0;
 
@@ -33,11 +47,11 @@ static Vertex* g_vertices = NULL;
 static size_t g_vertexCount = 0;
 static size_t g_vertexCapacity = 0;
 
-static size_t g_batchCapacity = 1000000;
+static size_t g_batchCapacity = 999999;
 
 static int g_targetFPS = 0;
 static double g_frameStartTime = 0.0;
-static float frameTime = 0.0f;
+static float g_frameTime = 0.0f;
 
 static const char* defaultVertexShader =
 "#version 330 core\n"
@@ -47,9 +61,28 @@ static const char* defaultVertexShader =
 "\n"
 "out vec4 vColor;\n"
 "\n"
+"uniform vec2 uResolution;\n"
+"uniform vec2 uCameraPos;\n"
+"uniform vec2 uCameraOffset;\n"
+"uniform float uCameraRotation;\n"
+"uniform float uCameraZoom;\n"
+"\n"
 "void main()\n"
 "{\n"
-"    gl_Position = vec4(aPosition, 0.0, 1.0);\n"
+"    vec2 pos = aPosition - uCameraPos;\n"
+"\n"
+"    float c = cos(uCameraRotation);\n"
+"    float s = sin(uCameraRotation);\n"
+"    vec2 rotatedPos = vec2(\n"
+"        pos.x * c - pos.y * s,\n"
+"        pos.x * s + pos.y * c\n"
+"    );\n"
+"\n"
+"    vec2 finalPos = (rotatedPos * uCameraZoom) + uCameraOffset;\n"
+"\n"
+"    float x = (finalPos.x / uResolution.x) * 2.0 - 1.0;\n"
+"    float y = 1.0 - (finalPos.y / uResolution.y) * 2.0;\n"
+"    gl_Position = vec4(x, y, 0.0, 1.0);\n"
 "    vColor = aColor;\n"
 "}\n";
 
@@ -157,6 +190,9 @@ static bool GrowVertexBuffer(size_t requiredCapacity) {
     while (newCapacity < requiredCapacity)
         newCapacity *= 2;
 
+    if (newCapacity > g_batchCapacity)
+        newCapacity = g_batchCapacity;
+
     Vertex* newVertices = (Vertex*)realloc(
         g_vertices,
         newCapacity * sizeof(Vertex)
@@ -167,16 +203,6 @@ static bool GrowVertexBuffer(size_t requiredCapacity) {
 
     g_vertices = newVertices;
     g_vertexCapacity = newCapacity;
-
-    // FIX: Resize the GPU VBO to match the new capacity!
-    glBindBuffer(GL_ARRAY_BUFFER, g_batchVBO);
-    glBufferData(
-        GL_ARRAY_BUFFER,
-        g_vertexCapacity * sizeof(Vertex),
-        NULL,
-        GL_DYNAMIC_DRAW
-    );
-    glBindBuffer(GL_ARRAY_BUFFER, 0);
 
     return true;
 }
@@ -240,19 +266,6 @@ static void CreateBatch() {
     glBindVertexArray(0);
 }
 
-static Vec2 ScreenToNDC(Vec2 point) {
-    Vec2 result;
-
-    result.x =
-        (point.x / (float)g_windowWidth) * 2.0f - 1.0f;
-
-    result.y =
-        1.0f - (point.y / (float)g_windowHeight) * 2.0f;
-
-    return result;
-}
-
-
 bool InitWindow(int width, int height, const char* title) {
     if (!glfwInit()) {
         fprintf(stderr, "Failed to initialize GLFW\n");
@@ -311,6 +324,19 @@ bool InitWindow(int width, int height, const char* title) {
 
         return false;
     }
+
+    g_uResolutionLoc = glGetUniformLocation(g_defaultShader, "uResolution");
+    g_uCameraPosLoc = glGetUniformLocation(g_defaultShader, "uCameraPos");
+    g_uCameraOffsetLoc = glGetUniformLocation(g_defaultShader, "uCameraOffset");
+    g_uCameraRotationLoc = glGetUniformLocation(g_defaultShader, "uCameraRotation");
+    g_uCameraZoomLoc = glGetUniformLocation(g_defaultShader, "uCameraZoom");
+
+    glUseProgram(g_defaultShader);
+    glUniform2f(g_uResolutionLoc, (float)width, (float)height);
+    glUniform2f(g_uCameraPosLoc, 0.0f, 0.0f);
+    glUniform2f(g_uCameraOffsetLoc, 0.0f, 0.0f);
+    glUniform1f(g_uCameraRotationLoc, 0.0f);
+    glUniform1f(g_uCameraZoomLoc, 1.0f);
 
     CreateBatch();
 
@@ -374,19 +400,10 @@ static void LimitFrameRate(void) {
     if (remaining <= 0.0)
         return;
 
-    /*
-     * Sleep most of the remaining time.
-     *
-     * Leave about 1ms for the precision spin below.
-     */
     if (remaining > 0.001)
         SleepSeconds(remaining - 0.001);
 
-    /*
-     * Precisely wait for the rest.
-     */
     while ((glfwGetTime() - g_frameStartTime) < targetFrameTime) {
-        // spin
     }
 }
 
@@ -406,13 +423,84 @@ void BeginDrawing() {
         g_windowWidth = width;
         g_windowHeight = height;
 
-        glViewport(0, 0, width, height);
+        if (width > 0 && height > 0) {
+            glViewport(0, 0, width, height);
+
+            glUseProgram(g_defaultShader);
+            glUniform2f(g_uResolutionLoc, (float)width, (float)height);
+        }
     }
 
+    glUseProgram(g_defaultShader);
+    glUniform2f(g_uCameraPosLoc, 0.0f, 0.0f);
+    glUniform2f(g_uCameraOffsetLoc, 0.0f, 0.0f);
+    glUniform1f(g_uCameraRotationLoc, 0.0f);
+    glUniform1f(g_uCameraZoomLoc, 1.0f);
+}
+
+void ClearBackground(Color color) {
+    glClearColor(
+        (float)color.r / 255.0f,
+        (float)color.g / 255.0f,
+        (float)color.b / 255.0f,
+        (float)color.a / 255.0f
+    );
     glClear(
         GL_COLOR_BUFFER_BIT |
         GL_DEPTH_BUFFER_BIT
     );
+}
+
+void BeginMode2D(Camera2D camera) {
+    FlushBatch();
+
+    glUseProgram(g_defaultShader);
+    glUniform2f(g_uCameraPosLoc, camera.position.x, camera.position.y);
+    glUniform2f(g_uCameraOffsetLoc, camera.offset.x, camera.offset.y);
+    glUniform1f(g_uCameraRotationLoc, camera.rotation);
+    glUniform1f(g_uCameraZoomLoc, camera.zoom);
+}
+
+void EndMode2D() {
+    FlushBatch();
+
+    glUseProgram(g_defaultShader);
+    glUniform2f(g_uCameraPosLoc, 0.0f, 0.0f);
+    glUniform2f(g_uCameraOffsetLoc, 0.0f, 0.0f);
+    glUniform1f(g_uCameraRotationLoc, 0.0f);
+    glUniform1f(g_uCameraZoomLoc, 1.0f);
+}
+
+Vec2 GetScreenToWorld2D(Vec2 screenPosition, Camera2D camera) {
+    Vec2 worldPos;
+
+    float x = screenPosition.x - camera.offset.x;
+    float y = screenPosition.y - camera.offset.y;
+
+    x /= camera.zoom;
+    y /= camera.zoom;
+
+    if (camera.rotation != 0.0f) {
+        float cosAngle = cosf(-camera.rotation);
+        float sinAngle = sinf(-camera.rotation);
+
+        float rotX = x * cosAngle - y * sinAngle;
+        float rotY = x * sinAngle + y * cosAngle;
+
+        x = rotX;
+        y = rotY;
+    }
+
+    worldPos.x = x + camera.position.x;
+    worldPos.y = y + camera.position.y;
+
+    return worldPos;
+}
+
+Vec2 GetMousePosition() {
+    double xpos, ypos;
+    glfwGetCursorPos(g_window, &xpos, &ypos);
+    return (Vec2){ (float)xpos, (float)ypos };
 }
 
 static void FlushBatch() {
@@ -505,7 +593,7 @@ int GetScreenHeight() {
 
 void SetTargetFPS(int fps) {
     if (fps < 0)
-        fps = 0
+        fps = 0;
 
     g_targetFPS = fps;
 }
@@ -588,10 +676,6 @@ void DrawTriangle(Vec2 center, float radius, float rotation, Color color) {
         };
     }
 
-    a = ScreenToNDC(a);
-    b = ScreenToNDC(b);
-    c = ScreenToNDC(c);
-
     PushVertex((Vertex){a, color});
     PushVertex((Vertex){b, color});
     PushVertex((Vertex){c, color});
@@ -622,11 +706,6 @@ void DrawRectangle(Vec2 position, Vec2 size, Color color) {
         position.x - halfSize.x,
         position.y + halfSize.y
     };
-
-    topLeft = ScreenToNDC(topLeft);
-    topRight = ScreenToNDC(topRight);
-    bottomRight = ScreenToNDC(bottomRight);
-    bottomLeft = ScreenToNDC(bottomLeft);
 
     PushVertex((Vertex){topLeft, color});
     PushVertex((Vertex){topRight, color});
@@ -660,10 +739,6 @@ void DrawCircle(Vec2 center, float radius, Color color) {
             center.x + cosf(angle2) * radius,
             center.y + sinf(angle2) * radius
         };
-
-        a = ScreenToNDC(a);
-        b = ScreenToNDC(b);
-        c = ScreenToNDC(c);
 
         PushVertex((Vertex){a, color});
         PushVertex((Vertex){b, color});

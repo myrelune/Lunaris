@@ -17,6 +17,16 @@ typedef struct Color {
     float r, g, b, a;
 } Color;
 
+/**
+ * @brief Represents a 2D camera for panning, rotation, and zooming.
+ */
+typedef struct Camera2D {
+    Vec2 position;
+    Vec2 offset;
+    float rotation;
+    float zoom;
+} Camera2D;
+
 /** @brief Predefined Red color */
 static const Color RED   = {1, 0, 0, 1};
 /** @brief Predefined Green color */
@@ -51,6 +61,41 @@ bool WindowShouldClose();
  * @brief Prepares the frame for rendering. Must be called at the start of every frame.
  */
 void BeginDrawing();
+
+/**
+ * @brief Clears the screen with a specified background color.
+ *
+ * @param color The background color.
+ */
+void ClearBackground(Color color);
+
+/**
+ * @brief Begins a 2D camera mode context for world-space rendering.
+ *
+ * @param camera The 2D camera to apply.
+ */
+void BeginMode2D(Camera2D camera);
+
+/**
+ * @brief Ends the 2D camera mode context and returns to screen-space rendering.
+ */
+void EndMode2D();
+
+/**
+ * @brief Converts screen coordinates to world coordinates based on a 2D camera.
+ *
+ * @param screenPosition Position in screen space (e.g., pixels).
+ * @param camera The active 2D camera.
+ * @return Vec2 Position in world space.
+ */
+Vec2 GetScreenToWorld2D(Vec2 screenPosition, Camera2D camera);
+
+/**
+ * @brief Gets the current raw screen-space position of the mouse cursor.
+ *
+ * @return Vec2 Mouse position in pixels from the top-left corner.
+ */
+Vec2 GetMousePosition();
 
 /**
  * @brief Finalizes the frame rendering, flushes batches, and swaps buffers.
