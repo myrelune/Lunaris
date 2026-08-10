@@ -27,7 +27,7 @@ static Vertex* g_vertices = NULL;
 static size_t g_vertexCount = 0;
 static size_t g_vertexCapacity = 0;
 
-static size_t g_batchCapacity = 1000000
+static size_t g_batchCapacity = 1000000;
 
 static int g_targetFPS = 0;
 static double g_frameStartTime = 0.0;
