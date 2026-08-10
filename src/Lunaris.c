@@ -27,7 +27,7 @@ static Vertex* g_vertices = NULL;
 static size_t g_vertexCount = 0;
 static size_t g_vertexCapacity = 0;
 
-static size_t g_batchCapacity = 10000;
+static size_t g_batchCapacity = 1000000
 
 static int g_targetFPS = 0;
 static double g_frameStartTime = 0.0;
@@ -160,6 +160,16 @@ static bool GrowVertexBuffer(size_t requiredCapacity) {
 
     g_vertices = newVertices;
     g_vertexCapacity = newCapacity;
+
+    // FIX: Resize the GPU VBO to match the new capacity!
+    glBindBuffer(GL_ARRAY_BUFFER, g_batchVBO);
+    glBufferData(
+        GL_ARRAY_BUFFER,
+        g_vertexCapacity * sizeof(Vertex),
+        NULL,
+        GL_DYNAMIC_DRAW
+    );
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
 
     return true;
 }
