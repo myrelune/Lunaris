@@ -49,7 +49,16 @@ Since this project is set up as a static library, you can consume it by adding t
 
 ```cmake
 # Add the engine to your project
-add_subdirectory(path/to/lunaris)
+add_subdirectory(Lunaris)
 
 # Link it to your executable
 target_link_libraries(YourProjectName PRIVATE Lunaris)
+```
+
+## Example Setup:
+YourProject/
+  Lunaris/ 
+  CMakeLists.txt
+  src/
+    YourCode.c/c++
+  build
