@@ -8,6 +8,12 @@
 #include <stddef.h>
 #include <math.h>
 
+#ifdef _WIN32
+    #include <windows.h>
+    #else
+    #include <time.h>
+#endif
+
 typedef struct Vertex {
     Vec2 position;
     Color color;
@@ -31,6 +37,7 @@ static size_t g_batchCapacity = 1000000;
 
 static int g_targetFPS = 0;
 static double g_frameStartTime = 0.0;
+static float frameTime = 0.0f;
 
 static const char* defaultVertexShader =
 "#version 330 core\n"
@@ -271,6 +278,8 @@ bool InitWindow(int width, int height, const char* title) {
 
     glfwMakeContextCurrent(g_window);
 
+    glfwSwapInterval(0);
+
     if (!gladLoadGL(glfwGetProcAddress)) {
         fprintf(stderr, "Failed to load OpenGL\n");
 
@@ -330,10 +339,61 @@ bool WindowShouldClose() {
     return glfwWindowShouldClose(g_window);
 }
 
-void BeginDrawing() {
-    glfwPollEvents();
+static void SleepSeconds(double seconds) {
+    if (seconds <= 0.0)
+        return;
 
+    #ifdef _WIN32
+        DWORD milliseconds = (DWORD)(seconds * 1000.0);
+
+        if (milliseconds > 0)
+            Sleep(milliseconds);
+    #else
+        struct timespec ts;
+
+        ts.tv_sec = (time_t)seconds;
+        ts.tv_nsec = (long)((seconds - (double)ts.tv_sec) * 1000000000.0);
+
+        nanosleep(&ts, NULL);
+    #endif
+}
+
+static void LimitFrameRate(void) {
+    if (g_targetFPS <= 0)
+        return;
+
+    double targetFrameTime =
+        1.0 / (double)g_targetFPS;
+
+    double elapsed =
+        glfwGetTime() - g_frameStartTime;
+
+    double remaining =
+        targetFrameTime - elapsed;
+
+    if (remaining <= 0.0)
+        return;
+
+    /*
+     * Sleep most of the remaining time.
+     *
+     * Leave about 1ms for the precision spin below.
+     */
+    if (remaining > 0.001)
+        SleepSeconds(remaining - 0.001);
+
+    /*
+     * Precisely wait for the rest.
+     */
+    while ((glfwGetTime() - g_frameStartTime) < targetFrameTime) {
+        // spin
+    }
+}
+
+void BeginDrawing() {
     g_frameStartTime = glfwGetTime();
+
+    glfwPollEvents();
 
     g_vertexCount = 0;
 
@@ -390,18 +450,12 @@ void EndDrawing() {
 
     glfwSwapBuffers(g_window);
 
-    if (g_targetFPS > 0) {
-        double targetFrameTime = 1.0 / (double)g_targetFPS;
+    LimitFrameRate();
 
-        double frameTime =
-            glfwGetTime() - g_frameStartTime;
+    double now = glfwGetTime();
 
-        double remainingTime =
-            targetFrameTime - frameTime;
-
-        if (remainingTime > 0.0)
-            glfwWaitEventsTimeout(remainingTime);
-    }
+    g_frameTime =
+        (float)(now - g_frameStartTime);
 }
 
 void CloseWindow() {
@@ -450,25 +504,14 @@ int GetScreenHeight() {
 }
 
 void SetTargetFPS(int fps) {
+    if (fps < 0)
+        fps = 0
+
     g_targetFPS = fps;
 }
 
-float GetFrameTime() {
-    static double lastTime = 0.0;
-
-    double currentTime = glfwGetTime();
-
-    if (lastTime == 0.0) {
-        lastTime = currentTime;
-
-        return 0.0f;
-    }
-
-    float frameTime = (float)(currentTime - lastTime);
-
-    lastTime = currentTime;
-
-    return frameTime;
+float GetFrameTime(void) {
+    return g_frameTime;
 }
 
 float GetTime() {
