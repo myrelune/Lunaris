@@ -1,0 +1,9 @@
+PROJECT_NAME           = "Lunaris"
+PROJECT_BRIEF          = "A lightweight C-based graphics and voxel engine"
+OUTPUT_DIRECTORY       = docs
+INPUT                  = include src
+RECURSIVE              = YES
+EXTRACT_ALL            = YES
+OPTIMIZE_OUTPUT_FOR_C  = YES
+GENERATE_HTML          = YES
+GENERATE_LATEX         = NO

@@ -11,4 +11,3 @@ build/
 *.lib
 *.a
 docs/
-Doxyfile
