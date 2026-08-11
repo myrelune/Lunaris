@@ -3,6 +3,10 @@
 
 #include <stdbool.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /**
  * @brief Represents a 2D vector with X and Y coordinates.
  */
@@ -28,11 +32,11 @@ typedef struct Camera2D {
 } Camera2D;
 
 /** @brief Predefined Red color */
-static const Color RED   = {1, 0, 0, 1};
+static const Color RED = {1, 0, 0, 1};
 /** @brief Predefined Green color */
 static const Color GREEN = {0, 1, 0, 1};
 /** @brief Predefined Blue color */
-static const Color BLUE  = {0, 0, 1, 1};
+static const Color BLUE = {0, 0, 1, 1};
 /** @brief Predefined White color */
 static const Color WHITE = {1, 1, 1, 1};
 /** @brief Predefined Black color */
@@ -58,7 +62,8 @@ bool InitWindow(int width, int height, const char* title);
 bool WindowShouldClose();
 
 /**
- * @brief Prepares the frame for rendering. Must be called at the start of every frame.
+ * @brief Prepares the frame for rendering. Must be called at the start of every
+ * frame.
  */
 void BeginDrawing();
 
@@ -169,5 +174,37 @@ void DrawRectangle(Vec2 position, Vec2 size, Color color);
  * @param color Color of the circle.
  */
 void DrawCircle(Vec2 center, float radius, Color color);
+
+/**
+    * @brief Checks if a key has been pressed.
+    *
+    * @param key Key to check.
+    * @return true If the key is pressed.
+    * @return false Otherwise.
+*/
+bool IsKeyPressed(int key);
+
+
+/**
+ * @brief Checks if a key is currently pressed.
+ *
+ * @param key Key to check.
+ * @return true If the key is down.
+ * @return false Otherwise.
+ */
+bool IsKeyDown(int key);
+
+/**
+ * @brief Checks if a mouse button is currently pressed.
+ *
+ * @param button Button to check.
+ * @return true If the button is down.
+ * @return false Otherwise.
+ */
+bool IsMouseButtonDown(int button);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

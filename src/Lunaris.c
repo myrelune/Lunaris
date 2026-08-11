@@ -1,11 +1,7 @@
 #include "../include/Lunaris.h"
 
 #include "glad/gl.h"
-#ifdef _WIN32
-    #include <windows.h>
-    #else
-    #include <time.h>
-#endif
+
 #include "GLFW/glfw3.h"
 
 #include <stdbool.h>
@@ -14,10 +10,22 @@
 #include <stddef.h>
 #include <math.h>
 
+#ifdef _WIN32
+    #include <windows.h>
+#else
+    #include <unistd.h>
+#endif
+
+#define LUNARIS_DEFAULT_BATCH_CAPACITY 65536
+
+// Section: Internal Types
+
 typedef struct Vertex {
     Vec2 position;
     Color color;
 } Vertex;
+
+// Section: Internal State
 
 static GLFWwindow* g_window = NULL;
 
@@ -39,11 +47,13 @@ static Vertex* g_vertices = NULL;
 static size_t g_vertexCount = 0;
 static size_t g_vertexCapacity = 0;
 
-static size_t g_batchCapacity = 999999;
+static size_t g_batchCapacity = LUNARIS_DEFAULT_BATCH_CAPACITY;
 
 static int g_targetFPS = 0;
 static double g_frameStartTime = 0.0;
 static float g_frameTime = 0.0f;
+
+// Section: Shader Sources
 
 static const char* defaultVertexShader =
 "#version 330 core\n"
@@ -75,7 +85,7 @@ static const char* defaultVertexShader =
 "    float x = (finalPos.x / uResolution.x) * 2.0 - 1.0;\n"
 "    float y = 1.0 - (finalPos.y / uResolution.y) * 2.0;\n"
 "    gl_Position = vec4(x, y, 0.0, 1.0);\n"
-"    vColor = aColor;\n"
+"    vColor = aColor / 255.0;\n"
 "}\n";
 
 static const char* defaultFragmentShader =
@@ -89,6 +99,18 @@ static const char* defaultFragmentShader =
 "{\n"
 "    FragColor = vColor;\n"
 "}\n";
+
+// Section: Internal Forward Declarations
+
+static GLuint CreateShaderProgram(const char* vertexSource, const char* fragmentSource);
+static bool GrowVertexBuffer(size_t requiredCapacity);
+static bool PushVertex(Vertex vertex);
+static void CreateBatch(void);
+static void FlushBatch(void);
+static void SleepSeconds(double seconds);
+static void LimitFrameRate(void);
+
+// Section: Internal - Shader Compilation
 
 static GLuint CreateShaderProgram(const char* vertexSource, const char* fragmentSource) {
     GLuint vertexShader = glCreateShader(GL_VERTEX_SHADER);
@@ -170,20 +192,18 @@ static GLuint CreateShaderProgram(const char* vertexSource, const char* fragment
     return shaderProgram;
 }
 
+// Section: Internal - Batch / Vertex Buffer
+
 static bool GrowVertexBuffer(size_t requiredCapacity) {
     if (requiredCapacity <= g_vertexCapacity)
         return true;
 
     size_t newCapacity = g_vertexCapacity;
-
     if (newCapacity == 0)
         newCapacity = 10000;
 
     while (newCapacity < requiredCapacity)
         newCapacity *= 2;
-
-    if (newCapacity > g_batchCapacity)
-        newCapacity = g_batchCapacity;
 
     Vertex* newVertices = (Vertex*)realloc(
         g_vertices,
@@ -195,11 +215,20 @@ static bool GrowVertexBuffer(size_t requiredCapacity) {
 
     g_vertices = newVertices;
     g_vertexCapacity = newCapacity;
+    g_batchCapacity = newCapacity; // Keep them synced!
+
+    // RE-ALLOCATE GPU BUFFER TO MATCH NEW CAPACITY
+    glBindBuffer(GL_ARRAY_BUFFER, g_batchVBO);
+    glBufferData(
+        GL_ARRAY_BUFFER,
+        g_batchCapacity * sizeof(Vertex),
+        NULL,
+        GL_DYNAMIC_DRAW
+    );
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
 
     return true;
 }
-
-static void FlushBatch();
 
 static bool PushVertex(Vertex vertex) {
     if (g_vertexCount >= g_batchCapacity)
@@ -215,48 +244,89 @@ static bool PushVertex(Vertex vertex) {
     return true;
 }
 
-static void CreateBatch() {
+static void CreateBatch(void) {
     glGenVertexArrays(1, &g_batchVAO);
-
     glGenBuffers(1, &g_batchVBO);
+
+    glBindVertexArray(g_batchVAO);
+    glBindBuffer(GL_ARRAY_BUFFER, g_batchVBO);
+
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void*)offsetof(Vertex, position));
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void*)offsetof(Vertex, color));
+    glEnableVertexAttribArray(1);
+
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    glBindVertexArray(0);
+}
+
+static void FlushBatch(void) {
+    if (g_vertexCount == 0)
+        return;
+
+    glUseProgram(g_defaultShader);
 
     glBindVertexArray(g_batchVAO);
 
     glBindBuffer(GL_ARRAY_BUFFER, g_batchVBO);
 
-    glBufferData(
+    glBufferSubData(
         GL_ARRAY_BUFFER,
-        g_batchCapacity * sizeof(Vertex),
-        NULL,
-        GL_DYNAMIC_DRAW
-    );
-
-    glVertexAttribPointer(
         0,
-        2,
-        GL_FLOAT,
-        GL_FALSE,
-        sizeof(Vertex),
-        (void*)offsetof(Vertex, position)
+        g_vertexCount * sizeof(Vertex),
+        g_vertices
     );
 
-    glEnableVertexAttribArray(0);
-
-    glVertexAttribPointer(
-        1,
-        4,
-        GL_FLOAT,
-        GL_FALSE,
-        sizeof(Vertex),
-        (void*)offsetof(Vertex, color)
+    glDrawArrays(
+        GL_TRIANGLES,
+        0,
+        (GLsizei)g_vertexCount
     );
-
-    glEnableVertexAttribArray(1);
 
     glBindBuffer(GL_ARRAY_BUFFER, 0);
 
     glBindVertexArray(0);
+
+    g_vertexCount = 0;
 }
+
+// Section: Internal - Frame Timing
+
+static void SleepSeconds(double seconds) {
+    if (seconds <= 0.0)
+        return;
+
+    #ifdef _WIN32
+        Sleep((DWORD)(seconds * 1000.0));
+    #else
+        usleep((useconds_t)(seconds * 1000000.0));
+    #endif
+}
+
+static void LimitFrameRate(void) {
+    if (g_targetFPS <= 0)
+        return;
+
+    double targetFrameTime = 1.0 / (double)g_targetFPS;
+    double elapsed = glfwGetTime() - g_frameStartTime;
+    double remaining = targetFrameTime - elapsed;
+
+    if (remaining <= 0.0)
+        return;
+
+    if (remaining > 0.0015) {
+        SleepSeconds(remaining - 0.0010);
+    }
+
+    while (true) {
+        double remaining = targetFrameTime - (glfwGetTime() - g_frameStartTime);
+        if (remaining <= 0.0)
+            break;
+        SleepSeconds(remaining > 0.002 ? remaining - 0.001 : 0.0005);
+    }
+}
+
+// Section: Window Lifecycle
 
 bool InitWindow(int width, int height, const char* title) {
     if (!glfwInit()) {
@@ -330,6 +400,9 @@ bool InitWindow(int width, int height, const char* title) {
     glUniform1f(g_uCameraRotationLoc, 0.0f);
     glUniform1f(g_uCameraZoomLoc, 1.0f);
 
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
     CreateBatch();
 
     if (!GrowVertexBuffer(g_batchCapacity)) {
@@ -353,192 +426,11 @@ bool InitWindow(int width, int height, const char* title) {
     return true;
 }
 
-bool WindowShouldClose() {
+bool WindowShouldClose(void) {
     return glfwWindowShouldClose(g_window);
 }
 
-static void SleepSeconds(double seconds) {
-    if (seconds <= 0.0)
-        return;
-
-    #ifdef _WIN32
-        DWORD milliseconds = (DWORD)(seconds * 1000.0);
-
-        if (milliseconds > 0)
-            Sleep(milliseconds);
-    #else
-        struct timespec ts;
-
-        ts.tv_sec = (time_t)seconds;
-        ts.tv_nsec = (long)((seconds - (double)ts.tv_sec) * 1000000000.0);
-
-        nanosleep(&ts, NULL);
-    #endif
-}
-
-static void LimitFrameRate(void) {
-    if (g_targetFPS <= 0)
-        return;
-
-    double targetFrameTime =
-        1.0 / (double)g_targetFPS;
-
-    double elapsed =
-        glfwGetTime() - g_frameStartTime;
-
-    double remaining =
-        targetFrameTime - elapsed;
-
-    if (remaining <= 0.0)
-        return;
-
-    if (remaining > 0.001)
-        SleepSeconds(remaining - 0.001);
-
-    while ((glfwGetTime() - g_frameStartTime) < targetFrameTime) {
-    }
-}
-
-void BeginDrawing() {
-    g_frameStartTime = glfwGetTime();
-
-    glfwPollEvents();
-
-    g_vertexCount = 0;
-
-    int width;
-    int height;
-
-    glfwGetFramebufferSize(g_window, &width, &height);
-
-    if (width != g_windowWidth || height != g_windowHeight) {
-        g_windowWidth = width;
-        g_windowHeight = height;
-
-        if (width > 0 && height > 0) {
-            glViewport(0, 0, width, height);
-
-            glUseProgram(g_defaultShader);
-            glUniform2f(g_uResolutionLoc, (float)width, (float)height);
-        }
-    }
-
-    glUseProgram(g_defaultShader);
-    glUniform2f(g_uCameraPosLoc, 0.0f, 0.0f);
-    glUniform2f(g_uCameraOffsetLoc, 0.0f, 0.0f);
-    glUniform1f(g_uCameraRotationLoc, 0.0f);
-    glUniform1f(g_uCameraZoomLoc, 1.0f);
-}
-
-void ClearBackground(Color color) {
-    glClearColor(
-        (float)color.r / 255.0f,
-        (float)color.g / 255.0f,
-        (float)color.b / 255.0f,
-        (float)color.a / 255.0f
-    );
-    glClear(
-        GL_COLOR_BUFFER_BIT |
-        GL_DEPTH_BUFFER_BIT
-    );
-}
-
-void BeginMode2D(Camera2D camera) {
-    FlushBatch();
-
-    glUseProgram(g_defaultShader);
-    glUniform2f(g_uCameraPosLoc, camera.position.x, camera.position.y);
-    glUniform2f(g_uCameraOffsetLoc, camera.offset.x, camera.offset.y);
-    glUniform1f(g_uCameraRotationLoc, camera.rotation);
-    glUniform1f(g_uCameraZoomLoc, camera.zoom);
-}
-
-void EndMode2D() {
-    FlushBatch();
-
-    glUseProgram(g_defaultShader);
-    glUniform2f(g_uCameraPosLoc, 0.0f, 0.0f);
-    glUniform2f(g_uCameraOffsetLoc, 0.0f, 0.0f);
-    glUniform1f(g_uCameraRotationLoc, 0.0f);
-    glUniform1f(g_uCameraZoomLoc, 1.0f);
-}
-
-Vec2 GetScreenToWorld2D(Vec2 screenPosition, Camera2D camera) {
-    Vec2 worldPos;
-
-    float x = screenPosition.x - camera.offset.x;
-    float y = screenPosition.y - camera.offset.y;
-
-    x /= camera.zoom;
-    y /= camera.zoom;
-
-    if (camera.rotation != 0.0f) {
-        float cosAngle = cosf(-camera.rotation);
-        float sinAngle = sinf(-camera.rotation);
-
-        float rotX = x * cosAngle - y * sinAngle;
-        float rotY = x * sinAngle + y * cosAngle;
-
-        x = rotX;
-        y = rotY;
-    }
-
-    worldPos.x = x + camera.position.x;
-    worldPos.y = y + camera.position.y;
-
-    return worldPos;
-}
-
-Vec2 GetMousePosition() {
-    double xpos, ypos;
-    glfwGetCursorPos(g_window, &xpos, &ypos);
-    return (Vec2){ (float)xpos, (float)ypos };
-}
-
-static void FlushBatch() {
-    if (g_vertexCount == 0)
-        return;
-
-    glUseProgram(g_defaultShader);
-
-    glBindVertexArray(g_batchVAO);
-
-    glBindBuffer(GL_ARRAY_BUFFER, g_batchVBO);
-
-    glBufferSubData(
-        GL_ARRAY_BUFFER,
-        0,
-        g_vertexCount * sizeof(Vertex),
-        g_vertices
-    );
-
-    glDrawArrays(
-        GL_TRIANGLES,
-        0,
-        (GLsizei)g_vertexCount
-    );
-
-    glBindBuffer(GL_ARRAY_BUFFER, 0);
-
-    glBindVertexArray(0);
-
-    g_vertexCount = 0;
-}
-
-void EndDrawing() {
-    FlushBatch();
-
-    glfwSwapBuffers(g_window);
-
-    LimitFrameRate();
-
-    double now = glfwGetTime();
-
-    g_frameTime =
-        (float)(now - g_frameStartTime);
-}
-
-void closeWindow() {
+void closeWindow(void) {
     if (g_vertices) {
         free(g_vertices);
 
@@ -575,12 +467,63 @@ void closeWindow() {
     glfwTerminate();
 }
 
-int GetScreenWidth() {
-    return g_windowWidth;
+// Section: Frame Loop
+
+void BeginDrawing(void) {
+    g_frameStartTime = glfwGetTime();
+
+    glfwPollEvents();
+
+    g_vertexCount = 0;
+
+    int width;
+    int height;
+
+    glfwGetFramebufferSize(g_window, &width, &height);
+
+    if (width != g_windowWidth || height != g_windowHeight) {
+        g_windowWidth = width;
+        g_windowHeight = height;
+
+        if (width > 0 && height > 0) {
+            glViewport(0, 0, width, height);
+
+            glUseProgram(g_defaultShader);
+            glUniform2f(g_uResolutionLoc, (float)width, (float)height);
+        }
+    }
+
+    glUseProgram(g_defaultShader);
+    glUniform2f(g_uCameraPosLoc, 0.0f, 0.0f);
+    glUniform2f(g_uCameraOffsetLoc, 0.0f, 0.0f);
+    glUniform1f(g_uCameraRotationLoc, 0.0f);
+    glUniform1f(g_uCameraZoomLoc, 1.0f);
 }
 
-int GetScreenHeight() {
-    return g_windowHeight;
+void EndDrawing(void) {
+    FlushBatch();
+
+    glfwSwapBuffers(g_window);
+
+    LimitFrameRate();
+
+    double now = glfwGetTime();
+
+    g_frameTime =
+        (float)(now - g_frameStartTime);
+}
+
+void ClearBackground(Color color) {
+    glClearColor(
+        (float)color.r / 255.0f,
+        (float)color.g / 255.0f,
+        (float)color.b / 255.0f,
+        (float)color.a / 255.0f
+    );
+    glClear(
+        GL_COLOR_BUFFER_BIT |
+        GL_DEPTH_BUFFER_BIT
+    );
 }
 
 void SetTargetFPS(int fps) {
@@ -594,9 +537,73 @@ float GetFrameTime(void) {
     return g_frameTime;
 }
 
-float GetTime() {
+float GetTime(void) {
     return (float)glfwGetTime();
 }
+
+// Section: Camera / Coordinate Space
+
+void BeginMode2D(Camera2D camera) {
+    FlushBatch();
+
+    glUseProgram(g_defaultShader);
+    glUniform2f(g_uCameraPosLoc, camera.position.x, camera.position.y);
+    glUniform2f(g_uCameraOffsetLoc, camera.offset.x, camera.offset.y);
+    glUniform1f(g_uCameraRotationLoc, camera.rotation);
+    glUniform1f(g_uCameraZoomLoc, camera.zoom);
+}
+
+void EndMode2D(void) {
+    FlushBatch();
+
+    glUseProgram(g_defaultShader);
+    glUniform2f(g_uCameraPosLoc, 0.0f, 0.0f);
+    glUniform2f(g_uCameraOffsetLoc, 0.0f, 0.0f);
+    glUniform1f(g_uCameraRotationLoc, 0.0f);
+    glUniform1f(g_uCameraZoomLoc, 1.0f);
+}
+
+Vec2 GetScreenToWorld2D(Vec2 screenPosition, Camera2D camera) {
+    Vec2 worldPos;
+
+    float x = screenPosition.x - camera.offset.x;
+    float y = screenPosition.y - camera.offset.y;
+
+    x /= camera.zoom;
+    y /= camera.zoom;
+
+    if (camera.rotation != 0.0f) {
+        float cosAngle = cosf(-camera.rotation);
+        float sinAngle = sinf(-camera.rotation);
+
+        float rotX = x * cosAngle - y * sinAngle;
+        float rotY = x * sinAngle + y * cosAngle;
+
+        x = rotX;
+        y = rotY;
+    }
+
+    worldPos.x = x + camera.position.x;
+    worldPos.y = y + camera.position.y;
+
+    return worldPos;
+}
+
+Vec2 GetMousePosition(void) {
+    double xpos, ypos;
+    glfwGetCursorPos(g_window, &xpos, &ypos);
+    return (Vec2){ (float)xpos, (float)ypos };
+}
+
+int GetScreenWidth(void) {
+    return g_windowWidth;
+}
+
+int GetScreenHeight(void) {
+    return g_windowHeight;
+}
+
+// Section: Shape Drawing
 
 void DrawTriangle(Vec2 center, float radius, float rotation, Color color) {
     Vec2 a;
@@ -668,9 +675,11 @@ void DrawTriangle(Vec2 center, float radius, float rotation, Color color) {
         };
     }
 
-    PushVertex((Vertex){a, color});
-    PushVertex((Vertex){b, color});
-    PushVertex((Vertex){c, color});
+    if (!PushVertex((Vertex){a, color}) ||
+        !PushVertex((Vertex){b, color}) ||
+        !PushVertex((Vertex){c, color})) {
+        fprintf(stderr, "DrawTriangle: failed to push vertices (out of memory)\n");
+    }
 }
 
 void DrawRectangle(Vec2 position, Vec2 size, Color color) {
@@ -699,19 +708,24 @@ void DrawRectangle(Vec2 position, Vec2 size, Color color) {
         position.y + halfSize.y
     };
 
-    PushVertex((Vertex){topLeft, color});
-    PushVertex((Vertex){topRight, color});
-    PushVertex((Vertex){bottomRight, color});
-
-    PushVertex((Vertex){topLeft, color});
-    PushVertex((Vertex){bottomRight, color});
-    PushVertex((Vertex){bottomLeft, color});
+    if (!PushVertex((Vertex){topLeft, color}) ||
+        !PushVertex((Vertex){topRight, color}) ||
+        !PushVertex((Vertex){bottomRight, color}) ||
+        !PushVertex((Vertex){topLeft, color}) ||
+        !PushVertex((Vertex){bottomRight, color}) ||
+        !PushVertex((Vertex){bottomLeft, color})) {
+        fprintf(stderr, "DrawRectangle: failed to push vertices (out of memory)\n");
+    }
 }
 
-
 void DrawCircle(Vec2 center, float radius, Color color) {
-    const int segments = 32;
     const float PI = 3.14159265359f;
+
+    int segments = (int)(2.0f * PI * radius / 4.0f);
+    if (segments < 12)
+        segments = 12;
+    if (segments > 128)
+        segments = 128;
 
     for (int i = 0; i < segments; i++) {
         float angle1 =
@@ -732,8 +746,11 @@ void DrawCircle(Vec2 center, float radius, Color color) {
             center.y + sinf(angle2) * radius
         };
 
-        PushVertex((Vertex){a, color});
-        PushVertex((Vertex){b, color});
-        PushVertex((Vertex){c, color});
+        if (!PushVertex((Vertex){a, color}) ||
+            !PushVertex((Vertex){b, color}) ||
+            !PushVertex((Vertex){c, color})) {
+            fprintf(stderr, "DrawCircle: failed to push vertices (out of memory)\n");
+            return;
+        }
     }
 }
