@@ -105,7 +105,7 @@ void EndDrawing();
 /**
  * @brief Closes the window and frees all allocated engine resources.
  */
-void CloseWindow();
+void closeWindow();
 
 /**
  * @brief Gets the current width of the screen/window in pixels.

@@ -1,6 +1,11 @@
 #include "../include/Lunaris.h"
 
 #include "glad/gl.h"
+#ifdef _WIN32
+    #include <windows.h>
+    #else
+    #include <time.h>
+#endif
 #include "GLFW/glfw3.h"
 
 #include <stdbool.h>
@@ -8,12 +13,6 @@
 #include <stdlib.h>
 #include <stddef.h>
 #include <math.h>
-
-#ifdef _WIN32
-    #include <windows.h>
-    #else
-    #include <time.h>
-#endif
 
 typedef struct Vertex {
     Vec2 position;
@@ -539,7 +538,7 @@ void EndDrawing() {
         (float)(now - g_frameStartTime);
 }
 
-void CloseWindow() {
+void closeWindow() {
     if (g_vertices) {
         free(g_vertices);
 
