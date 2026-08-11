@@ -15,13 +15,6 @@
     #include <time.h>
 #endif
 
-typedef struct Camera2D {
-    Vec2 position;
-    Vec2 offset;
-    float rotation;
-    float zoom;
-} Camera2D;
-
 typedef struct Vertex {
     Vec2 position;
     Color color;
