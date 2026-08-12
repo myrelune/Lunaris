@@ -32,15 +32,15 @@ typedef struct Camera2D {
 } Camera2D;
 
 /** @brief Predefined Red color */
-static const Color RED = {1, 0, 0, 1};
+static const Color RED = {255, 0, 0, 255};
 /** @brief Predefined Green color */
-static const Color GREEN = {0, 1, 0, 1};
+static const Color GREEN = {0, 255, 0, 255};
 /** @brief Predefined Blue color */
-static const Color BLUE = {0, 0, 1, 1};
+static const Color BLUE = {0, 0, 255, 255};
 /** @brief Predefined White color */
-static const Color WHITE = {1, 1, 1, 1};
+static const Color WHITE = {255, 255, 255, 255};
 /** @brief Predefined Black color */
-static const Color BLACK = {0, 0, 0, 1};
+static const Color BLACK = {0, 0, 0, 255};
 
 /**
  * @brief Initializes the GLFW window and OpenGL context.
